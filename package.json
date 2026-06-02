@@ -1,0 +1,26 @@
+{
+  "name": "comment-gateway",
+  "version": "1.0.0",
+  "description": "Git Gateway service on Cloudflare Workers",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "login": "wrangler login"
+  },
+  "keywords": [
+    "git-gateway",
+    "cloudflare",
+    "workers"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "esbuild": "^0.27.3",
+    "formdata": "^0.10.4",
+    "itty-router": "^4.2.2",
+    "wrangler": "^4.70.0"
+  }
+}

@@ -1,0 +1,19 @@
+name = "comment-gateway"
+version = "1.0.0"
+main = "src/index.js"
+compatibility_date = "2026-06-01"
+account_id = ""
+
+[vars]
+ENVIRONMENT = "production"
+
+# 环境变量配置
+# npx wrangler secret put GITHUB_PAT
+
+
+[build]
+command = "npm install"
+
+[build.upload]
+format = "modules"
+main = "./src/index.js"
