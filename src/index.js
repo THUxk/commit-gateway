@@ -1,7 +1,7 @@
 /**
  * Git Gateway Service
  * 基于 Cloudflare Workers 部署
- * 版本: 1.0.0
+ * 版本: 1.1.0
  *
  * 仅保留 GitHub 写入方法，所有 commit 自动写入 v2606 分支
  */
@@ -24,7 +24,6 @@ const CORS_HEADERS = {
 // 内存存储
 // ========================================
 
-let gitConfig = null;
 const RATE_LIMIT_WINDOW = 60 * 1000; // 60 seconds
 const RATE_LIMIT_MAX = 60; // max requests per IP per window
 const rateLimitStore = new Map();
@@ -71,23 +70,6 @@ function checkRateLimit(request) {
   return null;
 }
 
-
-/**
- * 获取 Git 配置
- */
-function getGitConfig(env) {
-  if (gitConfig) {
-    return gitConfig;
-  }
-
-  return {
-    github_pat: env.GITHUB_PAT,
-    committer_name: env.COMMITTER_NAME || 'Git Gateway',
-    committer_email: env.COMMITTER_EMAIL || 'git@gateway.local',
-    branch: env.GIT_BRANCH || 'main'
-  };
-}
-
 /**
  * 获取仓库信息（固定为 THUxk/yourschool）
  */
@@ -124,33 +106,10 @@ function createErrorResponse(error, status = 500) {
 }
 
 /**
- * 生成动态分支名称：v+年份后两位+月份
- * 示例：v2606 (2026年6月)
- */
-function getDynamicBranchName() {
-  const now = new Date();
-  const year = String(now.getFullYear()).slice(-2);
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  return `v${year}${month}`;
-}
-
-/**
- * 生成上一个月份的分支名称
- * 示例：当前 v2606，前一个月 v2605；v2601 前一个月为 v2512
- */
-function getPreviousMonthBranchName() {
-  const now = new Date();
-  const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const year = String(prevMonth.getFullYear()).slice(-2);
-  const month = String(prevMonth.getMonth() + 1).padStart(2, '0');
-  return `v${year}${month}`;
-}
-
-/**
  * 查询分支引用 SHA，如果不存在返回 null
  */
-async function getBranchSha(owner, repo, branchName, pat) {
-  const url = `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branchName}`;
+async function getBranchSha(owner, repo, pat) {
+  const url = `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/data`;
   const response = await fetch(url, {
     method: 'GET',
     headers: createGitHubHeaders(pat)
@@ -160,37 +119,6 @@ async function getBranchSha(owner, repo, branchName, pat) {
   }
   const data = await response.json();
   return data?.object?.sha || null;
-}
-
-/**
- * 检查分支是否存在
- */
-async function branchExists(owner, repo, branchName, pat) {
-  const sha = await getBranchSha(owner, repo, branchName, pat);
-  return !!sha;
-}
-
-/**
- * 创建分支
- */
-async function createBranch(owner, repo, branchName, baseSha, pat) {
-  const url = `https://api.github.com/repos/${owner}/${repo}/git/refs`;
-  const body = {
-    ref: `refs/heads/${branchName}`,
-    sha: baseSha
-  };
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: createGitHubHeaders(pat),
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to create branch: ${response.statusText}`);
-  }
-
-  return await response.json();
 }
 
 // ========================================
@@ -229,10 +157,9 @@ router.get('/health', () => {
 router.post('/comment', async (request, env) => {
   try {
     const body = await request.json();
-    const config = getGitConfig(env);
     const repoInfo = await getRepoInfo(request, env);
 
-    if (!config.github_pat || !repoInfo) {
+    if (!env.GITHUB_PAT || !repoInfo) {
       return new Response(JSON.stringify({
         error: 'Repository configuration missing',
         error_description: 'GITHUB_PAT environment variable is required'
@@ -254,8 +181,7 @@ router.post('/comment', async (request, env) => {
 
     const owner = repoInfo.owner;
     const repo = repoInfo.repo;
-    const pat = config.github_pat;
-    const targetBranch = getDynamicBranchName(); // e.g., v2606
+    const pat = env.GITHUB_PAT;
 
     // === Step 1: 创建 Blob ===
     const blobRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, {
@@ -276,24 +202,7 @@ router.post('/comment', async (request, env) => {
     const blobSha = blobData.sha;
 
     // === Step 2: 获取目标分支当前 HEAD 的 tree SHA ===
-    let currentCommitSha = await getBranchSha(owner, repo, targetBranch, pat);
-
-    // 如果目标分支不存在，尝试从上个月或 main 分支初始化
-    if (!currentCommitSha) {
-      const prevBranch = getPreviousMonthBranchName();
-      currentCommitSha = await getBranchSha(owner, repo, prevBranch, pat);
-      if (!currentCommitSha) {
-        currentCommitSha = await getBranchSha(owner, repo, config.branch || 'main', pat);
-      }
-      if (!currentCommitSha) {
-        return new Response(JSON.stringify({
-          error: 'No base commit available',
-          error_description: 'Could not find a valid base branch (tried dynamic, previous month, and main).'
-        }), { status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } });
-      }
-      // 自动创建目标分支（指向 base commit）
-      await createBranch(owner, repo, targetBranch, currentCommitSha, pat);
-    }
+    let currentCommitSha = await getBranchSha(owner, repo, pat);
 
     // 获取当前 commit 的 root tree SHA
     const commitUrl = `https://api.github.com/repos/${owner}/${repo}/git/commits/${currentCommitSha}`;
@@ -309,7 +218,7 @@ router.post('/comment', async (request, env) => {
       base_tree: baseTreeSha,
       tree: [
         {
-          path: 'data/new.json',
+          path: `new_${Date.now()}.json`,
           mode: '100644',
           type: 'blob',
           sha: blobSha
@@ -334,13 +243,6 @@ router.post('/comment', async (request, env) => {
     const treeData = await treeRes.json();
     const newTreeSha = treeData.sha;
 
-    // === Step 4: 创建 Commit ===
-    const commitPayload = {
-      message: message,
-      tree: newTreeSha,
-      parents: [currentCommitSha]
-    };
-
     const userAgent = request.headers.get('User-Agent') || 'unknown';
     const referer = request.headers.get('Referer') || request.headers.get('referer') || 'unknown';
     const clientIp = getClientIp(request);
@@ -348,7 +250,20 @@ router.post('/comment', async (request, env) => {
 
     if (body && typeof body.message === 'string') {
       body.message = `${body.message}${clientInfo}`;
+    } else {
+      body.message = `${clientInfo}`;
     }
+
+    // === Step 4: 创建 Commit ===
+    const commitPayload = {
+      message: message,
+      tree: newTreeSha,
+      parents: [currentCommitSha],
+      committer: {
+        name: env.COMMITTER_NAME || 'CommentAPI',
+        email: env.COMMITTER_EMAIL || ''
+      }
+    };
 
     const newCommitRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/commits`, {
       method: 'POST',
@@ -368,7 +283,7 @@ router.post('/comment', async (request, env) => {
     const newCommitSha = newCommitData.sha;
 
     // === Step 5: 更新分支引用 ===
-    const updateRefRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${targetBranch}`, {
+    const updateRefRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/data`, {
       method: 'PATCH',
       headers: createGitHubHeaders(pat),
       body: JSON.stringify({ sha: newCommitSha, force: false }) // 非强制更新，避免意外覆盖
@@ -386,8 +301,6 @@ router.post('/comment', async (request, env) => {
     // === 成功响应 ===
     return new Response(JSON.stringify({
       success: true,
-      path: 'data/new.json',
-      branch: targetBranch,
       commit_sha: newCommitSha,
       blob_sha: blobSha,
       message: 'File successfully written to repository'
