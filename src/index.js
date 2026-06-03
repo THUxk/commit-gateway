@@ -246,22 +246,18 @@ router.post('/comment', async (request, env) => {
     const userAgent = request.headers.get('User-Agent') || 'unknown';
     const referer = request.headers.get('Referer') || request.headers.get('referer') || 'unknown';
     const clientIp = getClientIp(request);
-    const clientInfo = `\n\nClient Info:\n- IP: ${clientIp}\n- User-Agent: ${userAgent}\n- Referer: ${referer}`;
+    const clientInfo = `Client Info: - IP: ${clientIp} - User-Agent: ${userAgent} - Referer: ${referer}`;
 
-    if (body && typeof body.message === 'string') {
-      body.message = `${body.message}${clientInfo}`;
-    } else {
-      body.message = `${clientInfo}`;
-    }
+    body.message = `${clientInfo}`; // 废弃原 message 字段，改为自动生成包含客户端信息的 commit message
 
     // === Step 4: 创建 Commit ===
     const commitPayload = {
-      message: message,
+      message: body.message,
       tree: newTreeSha,
       parents: [currentCommitSha],
       committer: {
-        name: env.COMMITTER_NAME || 'CommentAPI',
-        email: env.COMMITTER_EMAIL || ''
+        name: 'CommentAPI',
+        email:'comment@yourschool.cc.cd'
       }
     };
 
@@ -303,7 +299,7 @@ router.post('/comment', async (request, env) => {
       success: true,
       commit_sha: newCommitSha,
       blob_sha: blobSha,
-      message: 'File successfully written to repository'
+      message: body.message
     }), {
       status: 201,
       headers: { 'Content-Type': 'application/json', ...CORS_HEADERS }
